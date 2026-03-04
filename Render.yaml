@@ -1,0 +1,10 @@
+hereservices:
+  - type: worker
+    name: almorish-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python almorish_2000.py
+    autoDeploy: false
+    envVars:
+      - key: PORT
+        value: 8080
