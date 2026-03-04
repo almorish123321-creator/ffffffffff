@@ -1,11 +1,23 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import asyncio
 import re
 import os
 import random
+import sys
+import logging
 from telethon import TelegramClient, events, Button
 from telethon.errors import SessionPasswordNeededError, FloodWaitError
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+
+# --- إعدادات التسجيل (Logging) لعرض الأخطاء بوضوح ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # --- إعدادات خادم الويب للاستضافة على Render ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -15,15 +27,26 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is running!")
 
 def run_health_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    server.serve_forever()
+    try:
+        port = int(os.environ.get("PORT", 8080))
+        logger.info(f"🚀 بدء خادم الصحة على المنفذ {port}")
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"❌ خطأ في خادم الصحة: {e}")
 
 # --- الإعدادات الأساسية ---
-API_ID = 33957094
-API_HASH = "35e04f65846f09700aac0696a59f1a37"
-BOT_TOKEN = "8568132127:AAG-4Mxkj7WxpQcVwUcX6GdGHRAfEMjQs_8"
-ADMIN_ID = 7853478744
+# يُفضل قراءة البيانات من المتغيرات البيئية للأمان
+API_ID = int(os.environ.get("API_ID", 33957094))
+API_HASH = os.environ.get("API_HASH", "35e04f65846f09700aac0696a59f1a37")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8568132127:AAG-4Mxkj7WxpQcVwUcX6GdGHRAfEMjQs_8")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 7853478744))
+
+# --- التحقق من البيانات الأساسية ---
+logger.info(f"✅ تم تحميل الإعدادات:")
+logger.info(f"   - API_ID: {str(API_ID)[:5]}... (مخفي جزئياً)")
+logger.info(f"   - ADMIN_ID: {ADMIN_ID}")
+logger.info(f"   - BOT_TOKEN: {BOT_TOKEN[:10]}... (مخفي جزئياً)")
 
 # --- المتغيرات ---
 USER_CLIENTS = {}
@@ -32,8 +55,15 @@ SETTINGS = {'interval': 3, 'encryption': True}
 TEMP = {}
 is_posting = False
 
-# --- البوت الرئيسي ---
-bot = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+# --- البوت الرئيسي مع معالجة الأخطاء ---
+try:
+    logger.info("🔄 محاولة بدء تشغيل البوت...")
+    bot = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+    logger.info("✅ تم بدء تشغيل البوت بنجاح!")
+except Exception as e:
+    logger.error(f"❌ فشل بدء تشغيل البوت: {e}")
+    logger.error("🔍 تأكد من صحة BOT_TOKEN و API_ID و API_HASH")
+    raise e  # هذا سيوقف التشغيل ويظهر الخطأ في سجلات Render
 
 def encrypt_text(text):
     if not SETTINGS.get('encryption'): return text
@@ -58,7 +88,10 @@ def main_buttons():
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
-    if event.sender_id != ADMIN_ID: return
+    if event.sender_id != ADMIN_ID: 
+        logger.warning(f"⚠️ محاولة وصول من شخص غير مصرح: {event.sender_id}")
+        return
+    logger.info(f"✅ المستخدم الرئيسي دخل لوحة التحكم: {event.sender_id}")
     await event.respond("👋 **أهلاً بك في النسخة النهائية من بوت النشر (almorish_2000)!**\n\nيمكنك التحكم الكامل من هنا:", buttons=main_buttons())
 
 @bot.on(events.CallbackQuery())
@@ -66,6 +99,7 @@ async def cb_handler(event):
     if event.sender_id != ADMIN_ID: return
     global is_posting
     data = event.data.decode()
+    logger.info(f"🔘 تم الضغط على زر: {data}")
     
     if data == "status":
         s = "✅ يعمل" if is_posting else "🛑 متوقف"
@@ -130,6 +164,7 @@ async def text_handler(event):
     if event.sender_id != ADMIN_ID: return
     state = TEMP.get(ADMIN_ID)
     text = event.text
+    logger.info(f"📨 رسالة جديدة من المستخدم: {text[:50]}...")
 
     # الانضمام التلقائي للروابط
     links = re.findall(r"(https?://t\.me/(?:joinchat/|\+)[a-zA-Z0-9_-]+|https?://t\.me/[a-zA-Z0-9_]+)", text)
@@ -147,7 +182,9 @@ async def text_handler(event):
                     else:
                         await client(JoinChannelRequest(link))
                     await event.respond(f"✅ {phone} انضم بنجاح.")
-                except Exception as e: await event.respond(f"❌ {phone} فشل: {str(e)[:50]}")
+                except Exception as e: 
+                    logger.error(f"❌ فشل انضمام {phone}: {e}")
+                    await event.respond(f"❌ {phone} فشل: {str(e)[:50]}")
         return
 
     if state == "msg":
@@ -164,38 +201,49 @@ async def text_handler(event):
         
     elif state == "phone":
         phone = text.strip()
-        client = TelegramClient(phone, API_ID, API_HASH)
-        await client.connect()
         try:
+            client = TelegramClient(phone, API_ID, API_HASH)
+            await client.connect()
             await client.send_code_request(phone)
             TEMP[ADMIN_ID] = {"s": "code", "p": phone, "c": client}
             await event.respond(f"📩 أرسل كود التحقق لـ {phone}:")
-        except Exception as e: await event.respond(f"❌ خطأ: {e}")
+        except Exception as e: 
+            logger.error(f"❌ خطأ في إضافة حساب {phone}: {e}")
+            await event.respond(f"❌ خطأ: {e}")
 
     elif isinstance(state, dict) and state.get("s") == "code":
         try:
             await state["c"].sign_in(state["p"], text.strip())
             USER_CLIENTS[state["p"]] = state["c"]
+            logger.info(f"✅ تم تفعيل الحساب {state['p']}")
             await event.respond(f"✅ تم تفعيل الحساب {state['p']} بنجاح!")
             TEMP.pop(ADMIN_ID)
         except SessionPasswordNeededError:
             TEMP[ADMIN_ID]["s"] = "pass"
             await event.respond("🔐 هذا الحساب محمي بكلمة سر. يرجى إرسالها:")
-        except Exception as e: await event.respond(f"❌ فشل: {e}")
+        except Exception as e: 
+            logger.error(f"❌ فشل تفعيل الحساب: {e}")
+            await event.respond(f"❌ فشل: {e}")
 
     elif isinstance(state, dict) and state.get("s") == "pass":
         try:
             await state["c"].sign_in(password=text.strip())
             USER_CLIENTS[state["p"]] = state["c"]
+            logger.info(f"✅ تم تفعيل الحساب {state['p']} بكلمة سر")
             await event.respond("✅ تم التفعيل بنجاح!")
             TEMP.pop(ADMIN_ID)
-        except Exception as e: await event.respond(f"❌ خطأ: {e}")
+        except Exception as e: 
+            logger.error(f"❌ خطأ في كلمة السر: {e}")
+            await event.respond(f"❌ خطأ: {e}")
 
 async def poster():
     global is_posting
+    logger.info("🚀 بدء مهمة النشر التلقائي")
     while is_posting:
         txt = MESSAGES.get("1")
-        if not txt or not USER_CLIENTS: break
+        if not txt or not USER_CLIENTS: 
+            logger.warning("⚠️ لا توجد رسالة أو حسابات، إيقاف النشر")
+            break
         for phone, client in list(USER_CLIENTS.items()):
             if not is_posting: break
             try:
@@ -203,14 +251,26 @@ async def poster():
                     if dialog.is_group or dialog.is_channel:
                         try:
                             await client.send_message(dialog.id, encrypt_text(txt))
+                            logger.info(f"📤 تم النشر إلى {dialog.name} بواسطة {phone}")
                             await asyncio.sleep(SETTINGS['interval'])
-                        except FloodWaitError as e: await asyncio.sleep(e.seconds)
-                        except: pass
-            except: pass
+                        except FloodWaitError as e:
+                            logger.warning(f"⏳ انتظار بسبب Flood: {e.seconds} ثانية")
+                            await asyncio.sleep(e.seconds)
+                        except Exception as e:
+                            logger.error(f"❌ فشل النشر إلى {dialog.name}: {e}")
+            except Exception as e:
+                logger.error(f"❌ خطأ في حساب {phone}: {e}")
         await asyncio.sleep(5)
 
 if __name__ == "__main__":
     # تشغيل خادم الويب في خيط منفصل للاستضافة
-    threading.Thread(target=run_health_server, daemon=True).start()
-    print("🚀 البوت يعمل بكامل ميزاته... أرسل /start")
-    bot.run_until_disconnected()
+    try:
+        logger.info("🚀 بدء تشغيل خادم الصحة في خيط منفصل")
+        threading.Thread(target=run_health_server, daemon=True).start()
+        
+        logger.info("🚀 البوت يعمل بكامل ميزاته... أرسل /start")
+        print("🚀 البوت يعمل بكامل ميزاته... أرسل /start")
+        bot.run_until_disconnected()
+    except Exception as e:
+        logger.error(f"❌ خطأ غير متوقع: {e}")
+        raise e
